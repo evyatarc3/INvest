@@ -11,7 +11,7 @@
     <header>
         <div class="header-content">
             <h1>INvest</h1>
-            <p class="subtitle">ניתוח סטטיסטי של מניות | ניתוח הסתברותי היסטורי - לא המלצות השקעה</p>
+            <p class="subtitle">ניתוח סטטיסטי של מניות | ניתוח הסתברותי היסטורי + חיזוי קדימה - לא המלצות השקעה</p>
         </div>
     </header>
 
@@ -22,7 +22,7 @@
             <div class="controls">
                 <div class="control-group">
                     <label for="months-back">חודשים אחורה:</label>
-                    <input type="range" id="months-back" min="3" max="12" value="11" oninput="document.getElementById('months-val').textContent=this.value">
+                    <input type="range" id="months-back" min="3" max="36" value="11" oninput="document.getElementById('months-val').textContent=this.value">
                     <span id="months-val">11</span>
                 </div>
                 <div class="control-group">
@@ -30,7 +30,26 @@
                     <input type="range" id="top-n" min="3" max="10" value="5" oninput="document.getElementById('topn-val').textContent=this.value">
                     <span id="topn-val">5</span>
                 </div>
-                <button id="run-backtest" onclick="runBacktest()">הרץ ניתוח</button>
+            </div>
+            <div class="controls filter-row">
+                <div class="control-group">
+                    <label for="sector-filter">סקטור:</label>
+                    <select id="sector-filter">
+                        <option value="">כל הסקטורים</option>
+                        <option value="Technology">טכנולוגיה</option>
+                        <option value="Finance">פיננסים</option>
+                        <option value="Healthcare">בריאות</option>
+                        <option value="Energy">אנרגיה</option>
+                        <option value="Consumer">צריכה</option>
+                        <option value="Industrial">תעשייה</option>
+                        <option value="Semiconductors">מוליכים למחצה</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label for="ticker-filter">מניה ספציפית:</label>
+                    <input type="text" id="ticker-filter" placeholder="למשל: AAPL,MSFT,NVDA" dir="ltr">
+                </div>
+                <button id="run-backtest" onclick="runBacktest()">הרץ ניתוח + חיזוי</button>
             </div>
             <div id="loading" class="loading hidden">
                 <div class="spinner"></div>
@@ -44,15 +63,30 @@
             <ul>
                 <li><strong>זה ניתוח, לא המלצה:</strong> המערכת מציגה הסתברויות מבוססות נתונים. היא לא ממליצה לקנות או למכור מניות.</li>
                 <li><strong>ללא הטיית ראייה לאחור:</strong> כל ניתוח מבוסס אך ורק על נתונים שהיו זמינים באותה נקודת זמן.</li>
-                <li><strong>אינדיקטורים כמותיים בלבד:</strong> מומנטום, RSI, ממוצעים נעים, תנודתיות - ללא "דעות" סובייקטיביות.</li>
-                <li><strong>אירועים בלתי צפויים:</strong> אירועים גיאופוליטיים (Liberation Day, מתקפת איראן) אינם ניתנים לחיזוי מטבעם.</li>
+                <li><strong>כיול רגרסיבי:</strong> החיזוי קדימה מכויל על בסיס הביצועים בפועל של המודל לאחור.</li>
                 <li><strong>ביצועי עבר לא מבטיחים עתיד.</strong></li>
             </ul>
         </section>
 
+        <!-- Forward Prediction (Bottom Line) -->
+        <section class="forward-section hidden" id="forward-section">
+            <h2>חיזוי קדימה - חודש הבא</h2>
+            <div class="bottom-line-card" id="bottom-line">
+            </div>
+            <div class="forward-picks" id="forward-picks">
+            </div>
+        </section>
+
+        <!-- Calibration / Regression -->
+        <section class="calibration-section hidden" id="calibration-section">
+            <h2>כיול רגרסיבי - דיוק המודל</h2>
+            <p class="section-desc">השוואה בין ההסתברויות שהמודל חישב לבין מה שקרה בפועל. מדד R² מראה עד כמה המודל מדויק.</p>
+            <div class="stats-grid" id="calibration-grid"></div>
+        </section>
+
         <!-- Statistics Overview -->
         <section class="stats-overview hidden" id="stats-section">
-            <h2>סטטיסטיקות ניתוח</h2>
+            <h2>סטטיסטיקות ניתוח אחורה</h2>
             <div class="stats-grid">
                 <div class="stat-card">
                     <div class="stat-value" id="stat-total-recs">-</div>
@@ -148,8 +182,8 @@
                     <p>הניתוח לא כולל עמלות מסחר, מיסים, spread, או slippage. בפועל, התשואות יהיו נמוכות יותר.</p>
                 </div>
                 <div class="note">
-                    <h4>מקור הנתונים</h4>
-                    <p>מחירי המניות מגיעים מ-Yahoo Finance. נתונים אלו עשויים להיות מותאמים לדיבידנדים ופיצולים אך לא בכל המקרים.</p>
+                    <h4>כיול רגרסיבי</h4>
+                    <p>החיזוי קדימה מכויל על בסיס ביצועי העבר. אם המודל היה אופטימי מדי, הכיול מתקן את זה בחיזוי הבא.</p>
                 </div>
             </div>
         </section>

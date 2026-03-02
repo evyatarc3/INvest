@@ -5,14 +5,15 @@ This application performs historical stock analysis by:
 1. Fetching real stock price data month by month
 2. Running technical analysis based on data available at each point in time
 3. Tracking recommendation performance over time
-4. Displaying statistics and event impact analysis
+4. Generating calibrated forward predictions
+5. Displaying statistics and event impact analysis
 """
 
 from flask import Flask, render_template, jsonify, request
 import json
 from datetime import datetime
 
-from backtest_engine import BacktestEngine
+from backtest_engine import BacktestEngine, STOCK_UNIVERSE
 from events_tracker import EventsTracker
 
 app = Flask(__name__)
@@ -27,13 +28,32 @@ def index():
 
 @app.route("/api/run-backtest", methods=["POST"])
 def run_backtest():
-    """Run the full backtest from start_date going forward month by month."""
+    """Run the full backtest with optional filters, plus forward prediction."""
     data = request.get_json() or {}
     months_back = data.get("months_back", 12)
     top_n = data.get("top_n", 5)
+    sector = data.get("sector", None)
+    tickers = data.get("tickers", None)
 
-    results = engine.run_full_backtest(months_back=months_back, top_n=top_n)
+    # Empty string means no filter
+    if sector == "":
+        sector = None
+    if tickers == "":
+        tickers = None
+
+    results = engine.run_full_backtest(
+        months_back=months_back,
+        top_n=top_n,
+        sector=sector,
+        tickers=tickers,
+    )
     return jsonify(results)
+
+
+@app.route("/api/sectors")
+def get_sectors():
+    """Return available sectors."""
+    return jsonify({"sectors": list(STOCK_UNIVERSE.keys())})
 
 
 @app.route("/api/monthly-analysis/<year_month>")

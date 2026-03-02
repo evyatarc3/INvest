@@ -1,6 +1,7 @@
 /**
  * INvest - Stock Analysis Dashboard Frontend
- * Probability-based analysis, NOT investment recommendations.
+ * Probability-based analysis + calibrated forward prediction.
+ * NOT investment recommendations.
  */
 
 let backtestData = null;
@@ -42,6 +43,8 @@ function getProbClass(val) {
 async function runBacktest() {
     const monthsBack = parseInt(document.getElementById('months-back').value);
     const topN = parseInt(document.getElementById('top-n').value);
+    const sector = document.getElementById('sector-filter').value;
+    const tickers = document.getElementById('ticker-filter').value.trim();
     const btn = document.getElementById('run-backtest');
     const loading = document.getElementById('loading');
 
@@ -49,10 +52,14 @@ async function runBacktest() {
     loading.classList.remove('hidden');
 
     try {
+        const body = { months_back: monthsBack, top_n: topN };
+        if (sector) body.sector = sector;
+        if (tickers) body.tickers = tickers;
+
         const response = await fetch('/api/run-backtest', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ months_back: monthsBack, top_n: topN })
+            body: JSON.stringify(body)
         });
 
         backtestData = await response.json();
@@ -69,18 +76,157 @@ async function runBacktest() {
 function renderResults() {
     if (!backtestData) return;
 
-    const { statistics, monthly_results } = backtestData;
+    const { statistics, monthly_results, calibration, forward_prediction } = backtestData;
 
     // Show sections
-    ['stats-section', 'prob-section', 'charts-section', 'events-section', 'monthly-section', 'honest-section'].forEach(id => {
+    ['forward-section', 'calibration-section', 'stats-section', 'prob-section',
+     'charts-section', 'events-section', 'monthly-section', 'honest-section'].forEach(id => {
         document.getElementById(id).classList.remove('hidden');
     });
 
+    renderForwardPrediction(forward_prediction, calibration);
+    renderCalibration(calibration);
     renderStatistics(statistics);
     renderProbabilityAccuracy(statistics);
     renderCharts(statistics, monthly_results);
     renderMonthlyDetails(monthly_results);
 }
+
+/* ========== Forward Prediction ========== */
+
+function renderForwardPrediction(forward, calibration) {
+    const bl = forward.bottom_line;
+    const container = document.getElementById('bottom-line');
+    const picksContainer = document.getElementById('forward-picks');
+
+    // Bottom line card
+    const probColor = bl.avg_calibrated_probability >= 0.55 ? 'positive-val' : bl.avg_calibrated_probability <= 0.45 ? 'negative-val' : '';
+    const returnColor = bl.expected_monthly_return >= 0 ? 'positive-val' : 'negative-val';
+
+    container.innerHTML = `
+        <div class="bottom-line-grid">
+            <div class="bl-main">
+                <div class="bl-title">שורה תחתונה - חיזוי לחודש הבא</div>
+                <div class="bl-recommendation">${bl.recommendation}</div>
+                <div class="bl-date">תאריך ניתוח: ${forward.analysis_date}</div>
+            </div>
+            <div class="bl-stats">
+                <div class="bl-stat">
+                    <div class="bl-value ${probColor}">${formatProbability(bl.avg_calibrated_probability)}</div>
+                    <div class="bl-label">הסתברות עלייה (מכוילת)</div>
+                </div>
+                <div class="bl-stat">
+                    <div class="bl-value ${returnColor}">${formatPercent(bl.expected_monthly_return)}</div>
+                    <div class="bl-label">תשואה חודשית צפויה</div>
+                </div>
+                <div class="bl-stat">
+                    <div class="bl-value">${(bl.model_confidence * 100).toFixed(1)}%</div>
+                    <div class="bl-label">R² - מדד דיוק המודל</div>
+                </div>
+                <div class="bl-stat">
+                    <div class="bl-value">${formatProbability(bl.avg_raw_probability)}</div>
+                    <div class="bl-label">הסתברות גולמית (לפני כיול)</div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    // Top picks table
+    const picks = forward.top_picks;
+    if (picks && picks.length > 0) {
+        picksContainer.innerHTML = `
+            <h3>מניות מובילות - חיזוי קדימה</h3>
+            <table class="rec-table forward-table">
+                <thead>
+                    <tr>
+                        <th>מניה</th>
+                        <th>סקטור</th>
+                        <th>ציון</th>
+                        <th>הסתברות גולמית</th>
+                        <th>הסתברות מכוילת</th>
+                        <th>ביטחון</th>
+                        <th>מחיר נוכחי</th>
+                        <th>RSI</th>
+                        <th>תנודתיות</th>
+                        <th>מומנטום 1 חודש</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${picks.map(p => `
+                        <tr>
+                            <td class="ticker-cell">${p.ticker}</td>
+                            <td>${p.sector}</td>
+                            <td>${p.score}</td>
+                            <td class="${getProbClass(p.up_probability)}">${formatProbability(p.up_probability)}</td>
+                            <td class="${getProbClass(p.calibrated_probability)}"><strong>${formatProbability(p.calibrated_probability)}</strong></td>
+                            <td>${p.signals_aligned}/${p.total_signals}</td>
+                            <td>$${p.price_at_analysis}</td>
+                            <td>${p.rsi}</td>
+                            <td>${p.volatility}%</td>
+                            <td class="${getReturnClass(p.momentum_1m)}">${formatPercent(p.momentum_1m)}</td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+    }
+}
+
+/* ========== Calibration ========== */
+
+function renderCalibration(cal) {
+    const grid = document.getElementById('calibration-grid');
+
+    if (cal.error) {
+        grid.innerHTML = `<p class="no-data">${cal.error}</p>`;
+        return;
+    }
+
+    const biasClass = cal.model_bias >= 0 ? 'positive-val' : 'negative-val';
+    const biasText = cal.model_bias >= 0 ? 'אופטימי' : 'פסימי';
+
+    let html = `
+        <div class="stat-card highlight">
+            <div class="stat-value">${(cal.r_squared * 100).toFixed(1)}%</div>
+            <div class="stat-label">R² - מדד התאמת הרגרסיה</div>
+            <div class="stat-sublabel">כמה טוב המודל מכויל</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${(cal.actual_success_rate * 100).toFixed(1)}%</div>
+            <div class="stat-label">שיעור הצלחה בפועל</div>
+            <div class="stat-sublabel">מתוך ${cal.total_pairs} ניתוחים</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">${(cal.avg_predicted_prob * 100).toFixed(1)}%</div>
+            <div class="stat-label">הסתברות ממוצעת שחושבה</div>
+        </div>
+        <div class="stat-card ${cal.model_bias >= 0 ? 'positive' : 'negative'}">
+            <div class="stat-value ${biasClass}">${(cal.model_bias * 100).toFixed(1)}%</div>
+            <div class="stat-label">הטיית המודל</div>
+            <div class="stat-sublabel">המודל ${Math.abs(cal.model_bias) < 0.02 ? 'מכויל היטב' : biasText + ' מדי'}</div>
+        </div>
+    `;
+
+    // Bucket details
+    if (cal.buckets) {
+        for (const [name, b] of Object.entries(cal.buckets)) {
+            const bucketNames = { high: 'גבוהה', medium: 'בינונית', low: 'נמוכה' };
+            const ratio = b.calibration_ratio;
+            const ratioClass = ratio >= 0.9 && ratio <= 1.1 ? 'positive-val' : 'negative-val';
+            html += `
+                <div class="stat-card">
+                    <div class="stat-value ${ratioClass}">${ratio.toFixed(2)}x</div>
+                    <div class="stat-label">יחס כיול - הסתברות ${bucketNames[name]}</div>
+                    <div class="stat-sublabel">חזה ${(b.avg_predicted_prob * 100).toFixed(0)}%, בפועל ${(b.actual_success_rate * 100).toFixed(0)}% (${b.count} מניות)</div>
+                </div>
+            `;
+        }
+    }
+
+    grid.innerHTML = html;
+}
+
+/* ========== Statistics ========== */
 
 function renderStatistics(stats) {
     document.getElementById('stat-total-recs').textContent = stats.total_analyses;
@@ -133,6 +279,8 @@ function renderProbabilityAccuracy(stats) {
 
     grid.innerHTML = html;
 }
+
+/* ========== Charts ========== */
 
 function renderCharts(stats, monthlyResults) {
     Object.values(charts).forEach(c => c.destroy());
@@ -316,6 +464,8 @@ function renderSectorHitChart(stats) {
     });
 }
 
+/* ========== Events ========== */
+
 async function loadEvents() {
     try {
         const response = await fetch('/api/events');
@@ -344,6 +494,8 @@ function renderTimeline(events) {
         </div>
     `).join('');
 }
+
+/* ========== Monthly Details ========== */
 
 function renderMonthlyDetails(monthlyResults) {
     const container = document.getElementById('monthly-details');
