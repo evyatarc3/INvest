@@ -31,19 +31,75 @@ ALL_TICKERS = list(set(
     ticker for tickers in STOCK_UNIVERSE.values() for ticker in tickers
 ))
 
+# Sector lookup for fast access
+TICKER_TO_SECTOR = {}
+for _sector, _tickers in STOCK_UNIVERSE.items():
+    for _t in _tickers:
+        TICKER_TO_SECTOR[_t] = _sector
+
 
 class BacktestEngine:
     def __init__(self):
         self._cache = {}
+        self._bulk_data = {}
         self._backtest_results = None
         self._statistics = None
 
+    def _resolve_tickers(self, sector=None, tickers=None):
+        """Resolve which tickers to analyze based on filters."""
+        if tickers:
+            if isinstance(tickers, str):
+                tickers = [t.strip().upper() for t in tickers.split(",")]
+            return tickers
+        if sector:
+            return STOCK_UNIVERSE.get(sector, ALL_TICKERS)
+        return ALL_TICKERS
+
+    def _bulk_download(self, tickers, start_date, end_date):
+        """Download all tickers at once using yf.download for much faster fetching."""
+        try:
+            df = yf.download(
+                tickers,
+                start=start_date,
+                end=end_date,
+                group_by="ticker",
+                threads=True,
+            )
+            if df.empty:
+                return
+
+            for ticker in tickers:
+                try:
+                    if len(tickers) == 1:
+                        ticker_df = df.copy()
+                    else:
+                        ticker_df = df[ticker].copy()
+                    ticker_df = ticker_df.dropna(subset=["Close"])
+                    if not ticker_df.empty:
+                        self._bulk_data[ticker] = ticker_df
+                except (KeyError, Exception):
+                    continue
+        except Exception:
+            pass
+
     def _fetch_stock_data(self, ticker, start_date, end_date):
-        """Fetch historical stock data. Uses cache to avoid repeated API calls."""
+        """Fetch historical stock data. Uses bulk pre-downloaded data when available."""
         cache_key = f"{ticker}_{start_date}_{end_date}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
+        # Try to slice from bulk data first
+        if ticker in self._bulk_data:
+            try:
+                bulk = self._bulk_data[ticker]
+                sliced = bulk.loc[start_date:end_date]
+                if not sliced.empty:
+                    self._cache[cache_key] = sliced
+                    return sliced
+            except Exception:
+                pass
+
+        # Fallback to individual download
         try:
             stock = yf.Ticker(ticker)
             df = stock.history(start=start_date, end=end_date)
@@ -150,28 +206,18 @@ class BacktestEngine:
         """
         Convert technical score and indicators into a probability estimate
         for positive price movement in the next month.
-
-        This uses a logistic-style mapping: higher scores map to higher
-        probability of upward movement. The base rate for any stock going
-        up in a given month is ~55% (historical average for S&P 500 stocks).
         """
-        BASE_RATE = 0.55  # Historical base rate of monthly positive returns
+        BASE_RATE = 0.55
 
         if indicators is None:
             return BASE_RATE
 
-        # Logistic transformation of score to probability
-        # Score of 0 -> base rate, positive scores increase probability
         adjusted = 1 / (1 + np.exp(-score / 10))
-
-        # Blend with base rate to avoid extreme predictions
         probability = 0.4 * adjusted + 0.6 * BASE_RATE
 
-        # Signal confidence based on indicator alignment
         signals_aligned = 0
         total_signals = 0
 
-        # Check momentum alignment
         mom_1m = indicators.get("momentum_1m", 0)
         mom_3m = indicators.get("momentum_3m", 0)
         total_signals += 2
@@ -180,7 +226,6 @@ class BacktestEngine:
         if mom_3m > 0:
             signals_aligned += 1
 
-        # Check trend alignment
         total_signals += 1
         if indicators.get("price_vs_sma20", 0) > 0:
             signals_aligned += 1
@@ -190,7 +235,6 @@ class BacktestEngine:
             if indicators["sma_20_vs_50"] > 0:
                 signals_aligned += 1
 
-        # RSI in healthy range
         rsi = indicators.get("rsi", 50)
         total_signals += 1
         if 30 <= rsi <= 65:
@@ -205,20 +249,21 @@ class BacktestEngine:
             "total_signals": total_signals,
         }
 
-    def analyze_month(self, analysis_date):
+    def analyze_month(self, analysis_date, ticker_list=None):
         """
         Analyze stocks for a given month using ONLY data available up to that date.
-        This is the key anti-bias mechanism. Returns probability analysis, not recommendations.
+        This is the key anti-bias mechanism.
         """
         if isinstance(analysis_date, str):
             analysis_date = datetime.strptime(analysis_date, "%Y-%m")
 
-        # We fetch 6 months of history ending at the analysis date
         end_date = analysis_date.strftime("%Y-%m-%d")
         start_date = (analysis_date - relativedelta(months=6)).strftime("%Y-%m-%d")
 
+        tickers_to_analyze = ticker_list or ALL_TICKERS
+
         results = []
-        for ticker in ALL_TICKERS:
+        for ticker in tickers_to_analyze:
             df = self._fetch_stock_data(ticker, start_date, end_date)
             if df is None or df.empty:
                 continue
@@ -230,12 +275,7 @@ class BacktestEngine:
             score = self._score_stock(indicators)
             prob = self._calculate_probability(indicators, score)
 
-            # Find which sector this ticker belongs to
-            sector = "Other"
-            for sec, tickers in STOCK_UNIVERSE.items():
-                if ticker in tickers:
-                    sector = sec
-                    break
+            sector = TICKER_TO_SECTOR.get(ticker, "Other")
 
             results.append({
                 "ticker": ticker,
@@ -271,12 +311,10 @@ class BacktestEngine:
         if df is None or df.empty:
             return None
 
-        # Get the price approximately 1 month later
         target_date = rec_date + relativedelta(months=1)
         future_prices = df[df.index >= pd.Timestamp(target_date)]
 
         if future_prices.empty:
-            # Use last available price
             end_price = df["Close"].iloc[-1]
         else:
             end_price = future_prices["Close"].iloc[0]
@@ -288,7 +326,7 @@ class BacktestEngine:
             "positive": return_pct > 0,
         }
 
-    def run_full_backtest(self, months_back=12, top_n=5):
+    def run_full_backtest(self, months_back=12, top_n=5, sector=None, tickers=None):
         """
         Run the full backtest: for each month going back, analyze stocks
         and track actual performance of top-scored stocks.
@@ -296,15 +334,21 @@ class BacktestEngine:
         today = datetime.now()
         monthly_results = []
 
+        ticker_list = self._resolve_tickers(sector=sector, tickers=tickers)
+
+        # Pre-download ALL stock data in one batch call
+        earliest_analysis = (today - relativedelta(months=months_back)).replace(day=1)
+        bulk_start = (earliest_analysis - relativedelta(months=6)).strftime("%Y-%m-%d")
+        bulk_end = (today + timedelta(days=10)).strftime("%Y-%m-%d")
+        self._bulk_download(ticker_list, bulk_start, bulk_end)
+
         for i in range(months_back, 0, -1):
             analysis_date = today - relativedelta(months=i)
-            # Set to first of month
             analysis_date = analysis_date.replace(day=1)
 
-            month_analysis = self.analyze_month(analysis_date)
+            month_analysis = self.analyze_month(analysis_date, ticker_list=ticker_list)
             top_picks = month_analysis["analysis"][:top_n]
 
-            # Evaluate each top-scored stock
             evaluated = []
             for pick in top_picks:
                 perf = self._evaluate_pick(
@@ -344,12 +388,145 @@ class BacktestEngine:
 
         statistics = self._compute_statistics(monthly_results, all_returns)
 
+        # Compute calibration from backtest results
+        calibration = self._compute_calibration(monthly_results)
+
+        # Generate forward prediction
+        forward = self._predict_forward(top_n, ticker_list, calibration)
+
         self._backtest_results = monthly_results
         self._statistics = statistics
 
         return {
             "monthly_results": monthly_results,
             "statistics": statistics,
+            "calibration": calibration,
+            "forward_prediction": forward,
+        }
+
+    def _compute_calibration(self, monthly_results):
+        """
+        Compute regression calibration: how well did predicted probabilities
+        match actual outcomes? Returns calibration factors to adjust forward predictions.
+        """
+        pairs = []
+        for m in monthly_results:
+            for r in m["analysis"]:
+                if r["return_pct"] is not None and "up_probability" in r:
+                    pairs.append({
+                        "predicted": r["up_probability"],
+                        "actual_up": 1 if r["return_pct"] > 0 else 0,
+                        "actual_return": r["return_pct"],
+                    })
+
+        if len(pairs) < 5:
+            return {"error": "Not enough data for calibration", "factor": 1.0, "pairs": len(pairs)}
+
+        predicted = np.array([p["predicted"] for p in pairs])
+        actual = np.array([p["actual_up"] for p in pairs])
+        actual_returns = np.array([p["actual_return"] for p in pairs])
+
+        if np.std(predicted) > 0:
+            slope, intercept = np.polyfit(predicted, actual, 1)
+        else:
+            slope, intercept = 1.0, 0.0
+
+        predicted_outcomes = slope * predicted + intercept
+        ss_res = np.sum((actual - predicted_outcomes) ** 2)
+        ss_tot = np.sum((actual - np.mean(actual)) ** 2)
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+
+        buckets = {"high": [], "medium": [], "low": []}
+        for p in pairs:
+            if p["predicted"] >= 0.65:
+                buckets["high"].append(p)
+            elif p["predicted"] >= 0.50:
+                buckets["medium"].append(p)
+            else:
+                buckets["low"].append(p)
+
+        bucket_stats = {}
+        for name, bucket_pairs in buckets.items():
+            if bucket_pairs:
+                avg_predicted = np.mean([p["predicted"] for p in bucket_pairs])
+                actual_rate = np.mean([p["actual_up"] for p in bucket_pairs])
+                avg_return = np.mean([p["actual_return"] for p in bucket_pairs])
+                bucket_stats[name] = {
+                    "count": len(bucket_pairs),
+                    "avg_predicted_prob": round(float(avg_predicted), 3),
+                    "actual_success_rate": round(float(actual_rate), 3),
+                    "avg_actual_return": round(float(avg_return), 2),
+                    "calibration_ratio": round(float(actual_rate / avg_predicted), 3) if avg_predicted > 0 else 1.0,
+                }
+
+        avg_predicted_prob = float(np.mean(predicted))
+        actual_success_rate = float(np.mean(actual))
+        overall_bias = actual_success_rate - avg_predicted_prob
+
+        return {
+            "slope": round(float(slope), 4),
+            "intercept": round(float(intercept), 4),
+            "r_squared": round(float(r_squared), 4),
+            "total_pairs": len(pairs),
+            "avg_predicted_prob": round(avg_predicted_prob, 3),
+            "actual_success_rate": round(actual_success_rate, 3),
+            "model_bias": round(float(overall_bias), 3),
+            "avg_actual_return": round(float(np.mean(actual_returns)), 2),
+            "buckets": bucket_stats,
+        }
+
+    def _predict_forward(self, top_n, ticker_list, calibration):
+        """
+        Generate forward prediction using current data + calibration from backtest.
+        """
+        today = datetime.now()
+        analysis = self.analyze_month(today, ticker_list=ticker_list)
+
+        top_picks = analysis["analysis"][:top_n]
+
+        slope = calibration.get("slope", 1.0)
+        intercept = calibration.get("intercept", 0.0)
+        has_calibration = "error" not in calibration
+
+        calibrated_picks = []
+        for pick in top_picks:
+            entry = {**pick}
+            raw_prob = pick["up_probability"]
+
+            if has_calibration:
+                calibrated_prob = slope * raw_prob + intercept
+                calibrated_prob = round(min(max(calibrated_prob, 0.10), 0.95), 3)
+                entry["calibrated_probability"] = calibrated_prob
+            else:
+                entry["calibrated_probability"] = raw_prob
+
+            calibrated_picks.append(entry)
+
+        if calibrated_picks:
+            avg_calibrated_prob = np.mean([p["calibrated_probability"] for p in calibrated_picks])
+            avg_raw_prob = np.mean([p["up_probability"] for p in calibrated_picks])
+            avg_score = np.mean([p["score"] for p in calibrated_picks])
+
+            backtest_avg = calibration.get("avg_actual_return", 0)
+            expected_return = backtest_avg * (avg_calibrated_prob / 0.55) if backtest_avg != 0 else 0
+
+            bottom_line = {
+                "avg_raw_probability": round(float(avg_raw_prob), 3),
+                "avg_calibrated_probability": round(float(avg_calibrated_prob), 3),
+                "avg_score": round(float(avg_score), 2),
+                "expected_monthly_return": round(float(expected_return), 2),
+                "model_confidence": calibration.get("r_squared", 0),
+                "recommendation": _get_recommendation(avg_calibrated_prob, calibration.get("r_squared", 0)),
+            }
+        else:
+            bottom_line = {"error": "No stocks to analyze"}
+
+        return {
+            "analysis_date": today.strftime("%Y-%m-%d"),
+            "prediction_horizon": "1 month",
+            "stocks_analyzed": analysis["stocks_analyzed"],
+            "top_picks": calibrated_picks,
+            "bottom_line": bottom_line,
         }
 
     def _compute_statistics(self, monthly_results, all_returns):
@@ -360,7 +537,6 @@ class BacktestEngine:
         positive_returns = [r for r in all_returns if r > 0]
         negative_returns = [r for r in all_returns if r <= 0]
 
-        # Probability accuracy: did stocks with >60% probability actually go up?
         probability_buckets = {"high": [], "medium": [], "low": []}
         for m in monthly_results:
             for r in m["analysis"]:
@@ -382,7 +558,6 @@ class BacktestEngine:
                     "sample_size": len(outcomes),
                 }
 
-        # Sector performance
         sector_returns = {}
         for m in monthly_results:
             for r in m["analysis"]:
@@ -400,7 +575,6 @@ class BacktestEngine:
                 "count": len(returns),
             }
 
-        # Monthly progression
         cumulative = 0
         monthly_cumulative = []
         for m in monthly_results:
@@ -468,3 +642,26 @@ class BacktestEngine:
             "data_points": len(prices),
             "prices": prices,
         }
+
+
+def _get_recommendation(calibrated_prob, r_squared):
+    """Generate a text recommendation based on calibrated probability and model confidence."""
+    if r_squared < 0.01:
+        confidence_text = "אמינות המודל נמוכה"
+    elif r_squared < 0.1:
+        confidence_text = "אמינות המודל בינונית"
+    else:
+        confidence_text = "אמינות המודל סבירה"
+
+    if calibrated_prob >= 0.65:
+        signal = "סיגנל חיובי חזק"
+    elif calibrated_prob >= 0.55:
+        signal = "סיגנל חיובי מתון"
+    elif calibrated_prob >= 0.45:
+        signal = "ניטרלי - אין כיוון ברור"
+    elif calibrated_prob >= 0.35:
+        signal = "סיגנל שלילי מתון"
+    else:
+        signal = "סיגנל שלילי חזק"
+
+    return f"{signal} | {confidence_text}"

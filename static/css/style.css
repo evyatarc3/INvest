@@ -112,6 +112,35 @@ h2 {
     text-align: center;
 }
 
+.filter-row {
+    margin-top: 1rem;
+}
+
+.control-group select {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.5rem 1rem;
+    font-size: 0.95rem;
+    cursor: pointer;
+}
+
+.control-group input[type="text"] {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    padding: 0.5rem 1rem;
+    font-size: 0.95rem;
+    width: 200px;
+}
+
+.control-group input[type="text"]::placeholder {
+    color: var(--text-secondary);
+    opacity: 0.6;
+}
+
 #run-backtest {
     background: var(--gradient-blue);
     color: white;
@@ -492,6 +521,101 @@ footer {
     border-top: 1px solid var(--border-color);
 }
 
+/* Forward Prediction Section */
+.forward-section {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(139, 92, 246, 0.08));
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    border-radius: 12px;
+    padding: 1.5rem;
+}
+
+.bottom-line-card {
+    margin-bottom: 1.5rem;
+}
+
+.bottom-line-grid {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 1.5rem;
+    align-items: center;
+}
+
+.bl-main {
+    text-align: center;
+}
+
+.bl-title {
+    font-size: 1.1rem;
+    font-weight: bold;
+    color: var(--accent-blue);
+    margin-bottom: 0.75rem;
+}
+
+.bl-recommendation {
+    font-size: 1.3rem;
+    font-weight: bold;
+    color: var(--text-primary);
+    background: var(--bg-card);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 0.5rem;
+    border: 1px solid var(--border-color);
+}
+
+.bl-date {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.bl-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+}
+
+.bl-stat {
+    background: var(--bg-card);
+    border-radius: 10px;
+    padding: 1rem;
+    text-align: center;
+    border: 1px solid var(--border-color);
+}
+
+.bl-value {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: var(--accent-blue);
+    margin-bottom: 0.25rem;
+}
+
+.bl-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.forward-picks {
+    margin-top: 1rem;
+}
+
+.forward-picks h3 {
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+    font-size: 1rem;
+}
+
+.forward-table {
+    background: var(--bg-card);
+    border-radius: 8px;
+}
+
+/* Calibration Section */
+.calibration-section {
+    background: var(--bg-card);
+    border-radius: 12px;
+    padding: 1.5rem;
+    border: 1px solid var(--border-color);
+}
+
 /* Probability Section */
 .prob-accuracy {
     background: var(--bg-card);
@@ -544,6 +668,14 @@ footer {
     .month-summary {
         flex-wrap: wrap;
         gap: 0.75rem;
+    }
+
+    .bottom-line-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .bl-stats {
+        grid-template-columns: repeat(2, 1fr);
     }
 }
 
