@@ -65,7 +65,7 @@ class BacktestEngine:
                 group_by="ticker",
                 threads=True,
             )
-            if df.empty:
+            if df is None or df.empty:
                 return
 
             for ticker in tickers:
@@ -74,6 +74,15 @@ class BacktestEngine:
                         ticker_df = df.copy()
                     else:
                         ticker_df = df[ticker].copy()
+
+                    # Flatten MultiIndex columns if present
+                    if hasattr(ticker_df.columns, 'nlevels') and ticker_df.columns.nlevels > 1:
+                        ticker_df.columns = ticker_df.columns.get_level_values(-1)
+
+                    # Validate required columns exist
+                    if "Close" not in ticker_df.columns:
+                        continue
+
                     ticker_df = ticker_df.dropna(subset=["Close"])
                     if not ticker_df.empty:
                         self._bulk_data[ticker] = ticker_df
@@ -426,15 +435,21 @@ class BacktestEngine:
         actual = np.array([p["actual_up"] for p in pairs])
         actual_returns = np.array([p["actual_return"] for p in pairs])
 
-        if np.std(predicted) > 0:
-            slope, intercept = np.polyfit(predicted, actual, 1)
+        if np.std(predicted) > 0.001:
+            try:
+                slope, intercept = np.polyfit(predicted, actual, 1)
+                if np.isnan(slope) or np.isnan(intercept):
+                    slope, intercept = 1.0, 0.0
+            except Exception:
+                slope, intercept = 1.0, 0.0
         else:
             slope, intercept = 1.0, 0.0
 
         predicted_outcomes = slope * predicted + intercept
         ss_res = np.sum((actual - predicted_outcomes) ** 2)
         ss_tot = np.sum((actual - np.mean(actual)) ** 2)
-        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+        r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0.001 else 0
+        r_squared = max(r_squared, 0)  # Clamp negative R²
 
         buckets = {"high": [], "medium": [], "low": []}
         for p in pairs:
