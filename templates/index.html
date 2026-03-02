@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>INvest - ניתוח מניות היסטורי</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1>INvest</h1>
+            <p class="subtitle">ניתוח סטטיסטי של מניות | ניתוח הסתברותי היסטורי - לא המלצות השקעה</p>
+        </div>
+    </header>
+
+    <main>
+        <!-- Control Panel -->
+        <section class="control-panel">
+            <h2>הגדרות ניתוח</h2>
+            <div class="controls">
+                <div class="control-group">
+                    <label for="months-back">חודשים אחורה:</label>
+                    <input type="range" id="months-back" min="3" max="12" value="11" oninput="document.getElementById('months-val').textContent=this.value">
+                    <span id="months-val">11</span>
+                </div>
+                <div class="control-group">
+                    <label for="top-n">מניות לניתוח מעמיק לחודש:</label>
+                    <input type="range" id="top-n" min="3" max="10" value="5" oninput="document.getElementById('topn-val').textContent=this.value">
+                    <span id="topn-val">5</span>
+                </div>
+                <button id="run-backtest" onclick="runBacktest()">הרץ ניתוח</button>
+            </div>
+            <div id="loading" class="loading hidden">
+                <div class="spinner"></div>
+                <p>מריץ ניתוח הסתברותי... זה עשוי לקחת דקה או שתיים</p>
+            </div>
+        </section>
+
+        <!-- Disclaimer -->
+        <section class="bias-warning" id="bias-warning">
+            <h3>מידע חשוב</h3>
+            <ul>
+                <li><strong>זה ניתוח, לא המלצה:</strong> המערכת מציגה הסתברויות מבוססות נתונים. היא לא ממליצה לקנות או למכור מניות.</li>
+                <li><strong>ללא הטיית ראייה לאחור:</strong> כל ניתוח מבוסס אך ורק על נתונים שהיו זמינים באותה נקודת זמן.</li>
+                <li><strong>אינדיקטורים כמותיים בלבד:</strong> מומנטום, RSI, ממוצעים נעים, תנודתיות - ללא "דעות" סובייקטיביות.</li>
+                <li><strong>אירועים בלתי צפויים:</strong> אירועים גיאופוליטיים (Liberation Day, מתקפת איראן) אינם ניתנים לחיזוי מטבעם.</li>
+                <li><strong>ביצועי עבר לא מבטיחים עתיד.</strong></li>
+            </ul>
+        </section>
+
+        <!-- Statistics Overview -->
+        <section class="stats-overview hidden" id="stats-section">
+            <h2>סטטיסטיקות ניתוח</h2>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-total-recs">-</div>
+                    <div class="stat-label">מניות שנותחו</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-avg-return">-</div>
+                    <div class="stat-label">תשואה ממוצעת בפועל</div>
+                </div>
+                <div class="stat-card highlight">
+                    <div class="stat-value" id="stat-hit-rate">-</div>
+                    <div class="stat-label">דיוק חיזוי כיוון</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-cumulative">-</div>
+                    <div class="stat-label">תשואה מצטברת</div>
+                </div>
+                <div class="stat-card positive">
+                    <div class="stat-value" id="stat-best">-</div>
+                    <div class="stat-label">ביצוע מקסימלי</div>
+                </div>
+                <div class="stat-card negative">
+                    <div class="stat-value" id="stat-worst">-</div>
+                    <div class="stat-label">ביצוע מינימלי</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-positive-months">-</div>
+                    <div class="stat-label">חודשים חיוביים</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-std">-</div>
+                    <div class="stat-label">סטיית תקן</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Probability Accuracy -->
+        <section class="prob-accuracy hidden" id="prob-section">
+            <h2>דיוק ההסתברויות</h2>
+            <p class="section-desc">בדיקה: האם מניות שקיבלו הסתברות גבוהה אכן עלו? זהו מדד האמינות המרכזי.</p>
+            <div class="stats-grid" id="prob-grid"></div>
+        </section>
+
+        <!-- Charts -->
+        <section class="charts-section hidden" id="charts-section">
+            <h2>גרפים</h2>
+            <div class="charts-grid">
+                <div class="chart-container">
+                    <h3>תשואה מצטברת לאורך זמן</h3>
+                    <canvas id="cumulative-chart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>תשואה חודשית</h3>
+                    <canvas id="monthly-chart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>ביצועים לפי סקטור</h3>
+                    <canvas id="sector-chart"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h3>התפלגות סקטורים</h3>
+                    <canvas id="sector-hit-chart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- Events Timeline -->
+        <section class="events-section hidden" id="events-section">
+            <h2>ציר זמן - אירועים מרכזיים</h2>
+            <div class="timeline" id="events-timeline"></div>
+        </section>
+
+        <!-- Monthly Details -->
+        <section class="monthly-section hidden" id="monthly-section">
+            <h2>פירוט חודשי</h2>
+            <div id="monthly-details"></div>
+        </section>
+
+        <!-- Honest Notes -->
+        <section class="honest-notes hidden" id="honest-section">
+            <h2>מגבלות ושקיפות</h2>
+            <div class="notes-content">
+                <div class="note">
+                    <h4>מגבלות הניתוח הטכני</h4>
+                    <p>ניתוח טכני מבוסס על דפוסים היסטוריים. הוא לא יכול לחזות אירועים חד-פעמיים כמו מלחמות, מגפות, או שינויי מדיניות.</p>
+                </div>
+                <div class="note">
+                    <h4>הטיית סקטורים</h4>
+                    <p>מניות טכנולוגיה נוטות לקבל ציונים גבוהים יותר בשיטת מומנטום כי הן תנודתיות יותר. זו הטייה מובנית בשיטה.</p>
+                </div>
+                <div class="note">
+                    <h4>עלויות מעשיות</h4>
+                    <p>הניתוח לא כולל עמלות מסחר, מיסים, spread, או slippage. בפועל, התשואות יהיו נמוכות יותר.</p>
+                </div>
+                <div class="note">
+                    <h4>מקור הנתונים</h4>
+                    <p>מחירי המניות מגיעים מ-Yahoo Finance. נתונים אלו עשויים להיות מותאמים לדיבידנדים ופיצולים אך לא בכל המקרים.</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>INvest - ניתוח סטטיסטי בלבד | אין לראות בנתונים המוצגים ייעוץ השקעות או המלצה לקנות/למכור ניירות ערך</p>
+    </footer>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
