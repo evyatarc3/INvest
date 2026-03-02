@@ -35,15 +35,55 @@ ALL_TICKERS = list(set(
 class BacktestEngine:
     def __init__(self):
         self._cache = {}
+        self._bulk_data = {}  # ticker -> full DataFrame
         self._backtest_results = None
         self._statistics = None
 
+    def _bulk_download(self, tickers, start_date, end_date):
+        """Download all tickers at once using yf.download for much faster fetching."""
+        try:
+            df = yf.download(
+                tickers,
+                start=start_date,
+                end=end_date,
+                group_by="ticker",
+                threads=True,
+            )
+            if df.empty:
+                return
+
+            for ticker in tickers:
+                try:
+                    if len(tickers) == 1:
+                        ticker_df = df.copy()
+                    else:
+                        ticker_df = df[ticker].copy()
+                    ticker_df = ticker_df.dropna(subset=["Close"])
+                    if not ticker_df.empty:
+                        self._bulk_data[ticker] = ticker_df
+                except (KeyError, Exception):
+                    continue
+        except Exception:
+            pass
+
     def _fetch_stock_data(self, ticker, start_date, end_date):
-        """Fetch historical stock data. Uses cache to avoid repeated API calls."""
+        """Fetch historical stock data. Uses bulk pre-downloaded data when available."""
         cache_key = f"{ticker}_{start_date}_{end_date}"
         if cache_key in self._cache:
             return self._cache[cache_key]
 
+        # Try to slice from bulk data first
+        if ticker in self._bulk_data:
+            try:
+                bulk = self._bulk_data[ticker]
+                sliced = bulk.loc[start_date:end_date]
+                if not sliced.empty:
+                    self._cache[cache_key] = sliced
+                    return sliced
+            except Exception:
+                pass
+
+        # Fallback to individual download
         try:
             stock = yf.Ticker(ticker)
             df = stock.history(start=start_date, end=end_date)
@@ -295,6 +335,12 @@ class BacktestEngine:
         """
         today = datetime.now()
         monthly_results = []
+
+        # Pre-download ALL stock data in one batch call (much faster than individual calls)
+        earliest_analysis = (today - relativedelta(months=months_back)).replace(day=1)
+        bulk_start = (earliest_analysis - relativedelta(months=6)).strftime("%Y-%m-%d")
+        bulk_end = (today + timedelta(days=10)).strftime("%Y-%m-%d")
+        self._bulk_download(ALL_TICKERS, bulk_start, bulk_end)
 
         for i in range(months_back, 0, -1):
             analysis_date = today - relativedelta(months=i)
