@@ -63,9 +63,11 @@ async function runBacktest() {
         });
 
         backtestData = await response.json();
+        console.log('Backtest response:', backtestData);
         renderResults();
         loadEvents();
     } catch (error) {
+        console.error('Backtest error:', error);
         alert('שגיאה בהרצת הניתוח: ' + error.message);
     } finally {
         btn.disabled = false;
@@ -84,43 +86,60 @@ function renderResults() {
         document.getElementById(id).classList.remove('hidden');
     });
 
-    renderForwardPrediction(forward_prediction, calibration);
-    renderCalibration(calibration);
-    renderStatistics(statistics);
-    renderProbabilityAccuracy(statistics);
-    renderCharts(statistics, monthly_results);
-    renderMonthlyDetails(monthly_results);
+    // Check for backend errors
+    if (statistics && statistics.error) {
+        alert('שגיאה מהשרת: ' + statistics.error);
+        return;
+    }
+
+    try { renderStatistics(statistics); } catch(e) { console.error('renderStatistics:', e); }
+    try { renderProbabilityAccuracy(statistics); } catch(e) { console.error('renderProbabilityAccuracy:', e); }
+    try { renderCharts(statistics, monthly_results); } catch(e) { console.error('renderCharts:', e); }
+    try { renderMonthlyDetails(monthly_results); } catch(e) { console.error('renderMonthlyDetails:', e); }
+    try { renderForwardPrediction(forward_prediction, calibration); } catch(e) { console.error('renderForwardPrediction:', e); }
+    try { renderCalibration(calibration); } catch(e) { console.error('renderCalibration:', e); }
 }
 
 /* ========== Forward Prediction ========== */
 
 function renderForwardPrediction(forward, calibration) {
+    if (!forward || !forward.bottom_line) {
+        console.warn('No forward prediction data');
+        return;
+    }
     const bl = forward.bottom_line;
+    if (bl.error) {
+        document.getElementById('bottom-line').innerHTML = `<p class="no-data">${bl.error}</p>`;
+        return;
+    }
     const container = document.getElementById('bottom-line');
     const picksContainer = document.getElementById('forward-picks');
 
     // Bottom line card
-    const probColor = bl.avg_calibrated_probability >= 0.55 ? 'positive-val' : bl.avg_calibrated_probability <= 0.45 ? 'negative-val' : '';
-    const returnColor = bl.expected_monthly_return >= 0 ? 'positive-val' : 'negative-val';
+    const calProb = bl.avg_calibrated_probability || 0;
+    const expReturn = bl.expected_monthly_return || 0;
+    const modelConf = bl.model_confidence || 0;
+    const probColor = calProb >= 0.55 ? 'positive-val' : calProb <= 0.45 ? 'negative-val' : '';
+    const returnColor = expReturn >= 0 ? 'positive-val' : 'negative-val';
 
     container.innerHTML = `
         <div class="bottom-line-grid">
             <div class="bl-main">
                 <div class="bl-title">שורה תחתונה - חיזוי לחודש הבא</div>
-                <div class="bl-recommendation">${bl.recommendation}</div>
-                <div class="bl-date">תאריך ניתוח: ${forward.analysis_date}</div>
+                <div class="bl-recommendation">${bl.recommendation || '-'}</div>
+                <div class="bl-date">תאריך ניתוח: ${forward.analysis_date || '-'}</div>
             </div>
             <div class="bl-stats">
                 <div class="bl-stat">
-                    <div class="bl-value ${probColor}">${formatProbability(bl.avg_calibrated_probability)}</div>
+                    <div class="bl-value ${probColor}">${formatProbability(calProb)}</div>
                     <div class="bl-label">הסתברות עלייה (מכוילת)</div>
                 </div>
                 <div class="bl-stat">
-                    <div class="bl-value ${returnColor}">${formatPercent(bl.expected_monthly_return)}</div>
+                    <div class="bl-value ${returnColor}">${formatPercent(expReturn)}</div>
                     <div class="bl-label">תשואה חודשית צפויה</div>
                 </div>
                 <div class="bl-stat">
-                    <div class="bl-value">${(bl.model_confidence * 100).toFixed(1)}%</div>
+                    <div class="bl-value">${(modelConf * 100).toFixed(1)}%</div>
                     <div class="bl-label">R² - מדד דיוק המודל</div>
                 </div>
                 <div class="bl-stat">
