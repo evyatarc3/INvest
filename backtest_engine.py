@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Universe of stocks to analyze - major stocks across sectors
 STOCK_UNIVERSE = {
@@ -40,8 +41,7 @@ for _sector, _tickers in STOCK_UNIVERSE.items():
 
 class BacktestEngine:
     def __init__(self):
-        self._cache = {}
-        self._bulk_data = {}
+        self._ticker_data = {}  # ticker -> full DataFrame (downloaded once)
         self._backtest_results = None
         self._statistics = None
 
@@ -55,66 +55,55 @@ class BacktestEngine:
             return STOCK_UNIVERSE.get(sector, ALL_TICKERS)
         return ALL_TICKERS
 
-    def _bulk_download(self, tickers, start_date, end_date):
-        """Download all tickers at once using yf.download for much faster fetching."""
-        try:
-            df = yf.download(
-                tickers,
-                start=start_date,
-                end=end_date,
-                group_by="ticker",
-                threads=True,
-            )
-            if df is None or df.empty:
-                return
+    def _preload_tickers(self, tickers, start_date, end_date):
+        """Download all tickers in parallel. Each ticker downloaded once for full range."""
+        to_download = [t for t in tickers if t not in self._ticker_data]
+        if not to_download:
+            return
 
-            for ticker in tickers:
-                try:
-                    if len(tickers) == 1:
-                        ticker_df = df.copy()
-                    else:
-                        ticker_df = df[ticker].copy()
+        print(f"[INvest] מוריד נתונים ל-{len(to_download)} מניות...")
 
-                    # Flatten MultiIndex columns if present
-                    if hasattr(ticker_df.columns, 'nlevels') and ticker_df.columns.nlevels > 1:
-                        ticker_df.columns = ticker_df.columns.get_level_values(-1)
+        def download_one(ticker):
+            try:
+                stock = yf.Ticker(ticker)
+                df = stock.history(start=start_date, end=end_date)
+                if df is not None and not df.empty and "Close" in df.columns:
+                    return ticker, df
+            except Exception:
+                pass
+            return ticker, None
 
-                    # Validate required columns exist
-                    if "Close" not in ticker_df.columns:
-                        continue
+        done = 0
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(download_one, t): t for t in to_download}
+            for future in as_completed(futures):
+                ticker, df = future.result()
+                if df is not None:
+                    self._ticker_data[ticker] = df
+                done += 1
+                if done % 10 == 0:
+                    print(f"[INvest] {done}/{len(to_download)} מניות הורדו...")
 
-                    ticker_df = ticker_df.dropna(subset=["Close"])
-                    if not ticker_df.empty:
-                        self._bulk_data[ticker] = ticker_df
-                except (KeyError, Exception):
-                    continue
-        except Exception:
-            pass
+        loaded = sum(1 for t in to_download if t in self._ticker_data)
+        print(f"[INvest] הורדו {loaded}/{len(to_download)} מניות בהצלחה")
 
     def _fetch_stock_data(self, ticker, start_date, end_date):
-        """Fetch historical stock data. Uses bulk pre-downloaded data when available."""
-        cache_key = f"{ticker}_{start_date}_{end_date}"
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-
-        # Try to slice from bulk data first
-        if ticker in self._bulk_data:
+        """Get stock data by slicing from pre-downloaded full range."""
+        if ticker in self._ticker_data:
             try:
-                bulk = self._bulk_data[ticker]
-                sliced = bulk.loc[start_date:end_date]
+                df = self._ticker_data[ticker]
+                sliced = df.loc[start_date:end_date]
                 if not sliced.empty:
-                    self._cache[cache_key] = sliced
                     return sliced
             except Exception:
                 pass
 
-        # Fallback to individual download
+        # Fallback: download individually if not preloaded
         try:
             stock = yf.Ticker(ticker)
             df = stock.history(start=start_date, end=end_date)
-            if df.empty:
+            if df is None or df.empty:
                 return None
-            self._cache[cache_key] = df
             return df
         except Exception:
             return None
@@ -345,15 +334,17 @@ class BacktestEngine:
 
         ticker_list = self._resolve_tickers(sector=sector, tickers=tickers)
 
-        # Pre-download ALL stock data in one batch call
+        # Pre-download all ticker data in parallel (each ticker once)
         earliest_analysis = (today - relativedelta(months=months_back)).replace(day=1)
-        bulk_start = (earliest_analysis - relativedelta(months=6)).strftime("%Y-%m-%d")
-        bulk_end = (today + timedelta(days=10)).strftime("%Y-%m-%d")
-        self._bulk_download(ticker_list, bulk_start, bulk_end)
+        preload_start = (earliest_analysis - relativedelta(months=6)).strftime("%Y-%m-%d")
+        preload_end = (today + timedelta(days=10)).strftime("%Y-%m-%d")
+        self._preload_tickers(ticker_list, preload_start, preload_end)
 
+        print(f"[INvest] מנתח {months_back} חודשים...")
         for i in range(months_back, 0, -1):
             analysis_date = today - relativedelta(months=i)
             analysis_date = analysis_date.replace(day=1)
+            print(f"[INvest] חודש {months_back - i + 1}/{months_back}: {analysis_date.strftime('%Y-%m')}")
 
             month_analysis = self.analyze_month(analysis_date, ticker_list=ticker_list)
             top_picks = month_analysis["analysis"][:top_n]
@@ -397,11 +388,14 @@ class BacktestEngine:
 
         statistics = self._compute_statistics(monthly_results, all_returns)
 
+        print(f"[INvest] מחשב כיול רגרסיבי...")
         # Compute calibration from backtest results
         calibration = self._compute_calibration(monthly_results)
 
+        print(f"[INvest] מייצר חיזוי קדימה...")
         # Generate forward prediction
         forward = self._predict_forward(top_n, ticker_list, calibration)
+        print(f"[INvest] סיום!")
 
         self._backtest_results = monthly_results
         self._statistics = statistics
